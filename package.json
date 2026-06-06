@@ -1,0 +1,32 @@
+{
+  "name": "biblioteca-escolar",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@expo/metro-runtime": "~56.0.13",
+    "@expo/vector-icons": "^15.0.2",
+    "@supabase/supabase-js": "^2.106.2",
+    "expo": "~56.0.8",
+    "expo-constants": "~56.0.16",
+    "expo-linking": "~56.0.13",
+    "expo-router": "~56.2.8",
+    "expo-status-bar": "~56.0.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2",
+    "react-native-web": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "private": true
+}
