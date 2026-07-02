@@ -35,7 +35,7 @@ export default function AlunoLayout() {
         name="catalogo"
         options={{
           title: 'Catálogo',
-          tabBarIcon: ({ focused, color }) => (
+          tabBarIcon: ({ color }) => (
             <MaterialCommunityIcons
               name="book-multiple"
               size={24}
@@ -87,6 +87,15 @@ export default function AlunoLayout() {
           tabBarIcon: ({ color }) => (
             <Feather name="settings" size={24} color={color} />
           ),
+        }}
+      />
+
+      {/* ─── TELA DE DETALHES (OCULTA DA BARRA DE MENU) ─────────────────── */}
+      <Tabs.Screen
+        name="detalhes-livro"
+        options={{
+          // O segredo está aqui: esconde o botão do menu inferior
+          href: null, 
         }}
       />
     </Tabs>

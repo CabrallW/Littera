@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,18 +9,16 @@ import {
   SafeAreaView,
   StatusBar,
   Image,
-  Dimensions,
+  useWindowDimensions,
   Platform,
 } from 'react-native';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { Livro } from '../../lib/types';
 
-const { width } = Dimensions.get('window');
-const COLUMN_COUNT = 5;
 const PADDING = 32;
 const GAP = 8;
-const CARD_WIDTH = (width - (PADDING * 2) - (GAP * (COLUMN_COUNT - 1))) / COLUMN_COUNT;
 
 const COLORS = {
   primary: '#1E3A8A',
@@ -35,14 +33,16 @@ const COLORS = {
   success: '#10B981',
 };
 
-const CATEGORIES = ['Todos', 'Fantasia', 'Romance', 'Mistério', 'Clássicos'];
-
 // ─── Card de livro ────────────────────────────────────────────────────────────
-function BookCard({ book }: { book: Livro }) {
+function BookCard({ book, cardWidth, onPress }: { book: Livro; cardWidth: number; onPress: () => void }) {
   const isAvailable = book.quantidade_disponivel > 0;
 
   return (
-    <TouchableOpacity style={styles.card} activeOpacity={0.7}>
+    <TouchableOpacity 
+      style={[styles.card, { width: cardWidth }]} 
+      activeOpacity={0.7}
+      onPress={onPress}
+    >
       <View style={styles.imageContainer}>
         {book.capa_url ? (
           <Image source={{ uri: book.capa_url }} style={styles.bookImage} resizeMode="cover" />
@@ -71,12 +71,40 @@ function BookCard({ book }: { book: Livro }) {
 
 // ─── Tela principal ───────────────────────────────────────────────────────────
 export default function CatalogoScreen() {
+  const router = useRouter();
+  const { width } = useWindowDimensions();
+  const columnCount = width < 768 ? 3 : 5; 
+  const cardWidth = (width - (PADDING * 2) - (GAP * (columnCount - 1))) / columnCount;
+  
   const [livros, setLivros] = useState<Livro[]>([]);
+  // Estado para armazenar as categorias vindas do banco de dados
+  const [categories, setCategories] = useState<string[]>(['Todos']);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('Todos');
   const [search, setSearch] = useState('');
 
-  useEffect(() => { fetchLivros(); }, []);
+  useEffect(() => { 
+    fetchLivros(); 
+    fetchCategorias();
+  }, []);
+
+  async function fetchCategorias() {
+    try {
+      const { data, error } = await supabase
+        .from('categorias')
+        .select('nome')
+        .order('nome', { ascending: true });
+
+      if (error) throw error;
+
+      if (data) {
+        const nomesDasCategorias = data.map((cat) => cat.nome);
+        setCategories(['Todos', ...nomesDasCategorias]);
+      }
+    } catch (error) {
+      console.error('Erro ao buscar categorias para o aluno:', error);
+    }
+  }
 
   async function fetchLivros() {
     setLoading(true);
@@ -90,26 +118,18 @@ export default function CatalogoScreen() {
     }
   }
 
-  const filteredLivros = livros.filter((l: Livro) =>
-    l.titulo.toLowerCase().includes(search.toLowerCase()) ||
-    l.autor.toLowerCase().includes(search.toLowerCase())
-  );
-  const flatListRef = useRef<FlatList>(null);
+  // Lógica corrigida e otimizada com useMemo para aplicar tanto a busca por texto quanto o filtro por categoria
+  const filteredLivros = useMemo(() => {
+    return livros.filter((l: Livro) => {
+      const matchesSearch = 
+        l.titulo.toLowerCase().includes(search.toLowerCase()) ||
+        l.autor.toLowerCase().includes(search.toLowerCase());
+      
+      const matchesCategory = activeTab === 'Todos' || l.categoria === activeTab;
 
-  useEffect(() => {
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      window.scrollBy({ top: 150, behavior: 'smooth' });
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      window.scrollBy({ top: -150, behavior: 'smooth' });
-    }
-  };
-  document.addEventListener('keydown', handleKeyDown);
-  return () => document.removeEventListener('keydown', handleKeyDown);
-}, []);
+      return matchesSearch && matchesCategory;
+    });
+  }, [search, activeTab, livros]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -129,11 +149,11 @@ export default function CatalogoScreen() {
         </View>
       </View>
 
-      {/* Categorias */}
+      {/* Categorias Dinâmicas vindas do banco */}
       <View style={styles.chipsContainer}>
         <FlatList
           horizontal
-          data={CATEGORIES}
+          data={categories}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.chipsScroll}
           renderItem={({ item }) => (
@@ -158,15 +178,28 @@ export default function CatalogoScreen() {
 
       {/* Grid */}
       <FlatList
+        key={columnCount} 
         data={filteredLivros}
-        renderItem={({ item }) => <BookCard book={item} />}
         keyExtractor={(item) => item.id.toString()}
-        numColumns={COLUMN_COUNT}
+        numColumns={columnCount}
         contentContainerStyle={styles.listContainer}
         columnWrapperStyle={styles.row}
         showsVerticalScrollIndicator={false}
         refreshing={loading}
-        onRefresh={fetchLivros}
+        onRefresh={async () => {
+          await fetchLivros();
+          await fetchCategorias(); // Atualiza as categorias no "pull-to-refresh"
+        }}
+        renderItem={({ item }) => (
+          <BookCard 
+            book={item} 
+            cardWidth={cardWidth} 
+            onPress={() => router.push({
+              pathname: '/(aluno)/detalhes-livro',
+              params: { livro: JSON.stringify(item) }
+            })}
+          />
+        )}
         ListEmptyComponent={
           <View style={{ alignItems: 'center', paddingTop: 60 }}>
             <Text style={{ fontSize: 48 }}>📚</Text>
@@ -214,12 +247,12 @@ const styles = StyleSheet.create({
   resultCount: { fontSize: 12, color: COLORS.onSurfaceVariant },
   listContainer: { paddingHorizontal: PADDING, paddingBottom: 24 },
   row: { justifyContent: 'flex-start', gap: GAP, marginBottom: 20 },
-  card: { width: CARD_WIDTH },
+  card: { },
   imageContainer: { position: 'relative', marginBottom: 8 },
   bookImage: {
-  width: '100%', aspectRatio: 2 / 3,
-  borderRadius: 12, backgroundColor: COLORS.surfaceVariant,
-},
+    width: '100%', aspectRatio: 2 / 3,
+    borderRadius: 12, backgroundColor: COLORS.surfaceVariant,
+  },
   placeholderImage: { alignItems: 'center', justifyContent: 'center' },
   addButton: {
     position: 'absolute', bottom: 8, right: 8,

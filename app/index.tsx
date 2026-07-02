@@ -4,6 +4,7 @@ import {
   StyleSheet, SafeAreaView, StatusBar,
   ActivityIndicator, KeyboardAvoidingView, Platform,
 } from 'react-native';
+import { Feather } from '@expo/vector-icons'; // Importação dos ícones profissionais
 import { supabase } from '../lib/supabase';
 
 const COLORS = {
@@ -44,6 +45,7 @@ export default function LoginScreen() {
       setErro('E-mail ou senha incorretos.');
     }
 
+    loading && setLoading(false); // Tratamento simples para evitar vazamento de estado
     setLoading(false);
   }
 
@@ -57,7 +59,8 @@ export default function LoginScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.headerIcone}>📚</Text>
+          {/* Substituído 📚 por um ícone de livro aberto */}
+          <Feather name="book-open" size={56} color={COLORS.white} style={styles.headerIcone} />
           <Text style={styles.headerTitulo}>Biblioteca Escolar</Text>
           <Text style={styles.headerSub}>Faça login para continuar</Text>
         </View>
@@ -69,7 +72,8 @@ export default function LoginScreen() {
           <View style={styles.campoContainer}>
             <Text style={styles.campoLabel}>E-mail</Text>
             <View style={[styles.inputContainer, erro && styles.inputErro]}>
-              <Text style={styles.inputIcone}>✉️</Text>
+              {/* Substituído ✉️ por ícone de carta */}
+              <Feather name="mail" size={18} color={COLORS.textSecondary} style={styles.inputIcone} />
               <TextInput
                 style={styles.input}
                 placeholder="seu@email.com"
@@ -87,7 +91,8 @@ export default function LoginScreen() {
           <View style={styles.campoContainer}>
             <Text style={styles.campoLabel}>Senha</Text>
             <View style={[styles.inputContainer, erro && styles.inputErro]}>
-              <Text style={styles.inputIcone}>🔒</Text>
+              {/* Substituído 🔒 por ícone de cadeado */}
+              <Feather name="lock" size={18} color={COLORS.textSecondary} style={styles.inputIcone} />
               <TextInput
                 style={styles.input}
                 placeholder="••••••••"
@@ -97,8 +102,13 @@ export default function LoginScreen() {
                 secureTextEntry={!mostrarSenha}
                 autoCapitalize="none"
               />
-              <TouchableOpacity onPress={() => setMostrarSenha(!mostrarSenha)}>
-                <Text style={styles.inputIcone}>{mostrarSenha ? '🙈' : '👁️'}</Text>
+              <TouchableOpacity onPress={() => setMostrarSenha(!mostrarSenha)} activeOpacity={0.7}>
+                {/* Substituído 👁️ e 🙈 por ícones de olho aberto/fechado */}
+                <Feather 
+                  name={mostrarSenha ? "eye-off" : "eye"} 
+                  size={18} 
+                  color={COLORS.textSecondary} 
+                />
               </TouchableOpacity>
             </View>
           </View>
@@ -106,7 +116,9 @@ export default function LoginScreen() {
           {/* Erro */}
           {erro ? (
             <View style={styles.erroContainer}>
-              <Text style={styles.erroTexto}>⚠️ {erro}</Text>
+              {/* Substituído ⚠️ por ícone de alerta integrado */}
+              <Feather name="alert-triangle" size={16} color={COLORS.danger} style={{ marginRight: 6 }} />
+              <Text style={styles.erroTexto}>{erro}</Text>
             </View>
           ) : null}
 
@@ -139,7 +151,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: COLORS.primary },
   container: { flex: 1, justifyContent: 'center', paddingHorizontal: 24 },
   header: { alignItems: 'center', marginBottom: 32 },
-  headerIcone: { fontSize: 56, marginBottom: 12 },
+  headerIcone: { marginBottom: 12 }, // Limpo a propriedade fontSize que era do emoji
   headerTitulo: { fontSize: 26, fontWeight: '700', color: COLORS.white, marginBottom: 6 },
   headerSub: { fontSize: 14, color: '#93C5FD' },
   card: {
@@ -161,13 +173,13 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.bg,
   },
   inputErro: { borderColor: COLORS.danger },
-  inputIcone: { fontSize: 16, marginRight: 8 },
-  input: { flex: 1, fontSize: 15, color: COLORS.textPrimary },
+  inputIcone: { marginRight: 8 }, // Removido fontSize estático
+  input: { flex: 1, fontSize: 15, color: COLORS.textPrimary, paddingVertical: 0 }, // O paddingVertical evita desalinhamento no Android
   erroContainer: {
     backgroundColor: '#FEE2E2', borderRadius: 8,
-    padding: 10, marginBottom: 16,
+    padding: 10, marginBottom: 16, flexDirection: 'row', alignItems: 'center'
   },
-  erroTexto: { fontSize: 13, color: COLORS.danger },
+  erroTexto: { fontSize: 13, color: COLORS.danger, flex: 1 },
   botao: {
     backgroundColor: COLORS.primary, borderRadius: 12,
     paddingVertical: 14, alignItems: 'center', marginTop: 4,
