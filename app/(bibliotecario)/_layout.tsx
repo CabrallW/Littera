@@ -93,6 +93,14 @@ export default function BibliotecarioLayout() {
           ),
         }}
       />
+
+      {/* ─── TELA DE DETALHES DO ALUNO (OCULTA DA BARRA DE MENU) ─────────── */}
+      <Tabs.Screen
+        name="detalhes-aluno"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }
