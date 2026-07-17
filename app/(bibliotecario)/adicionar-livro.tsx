@@ -31,7 +31,7 @@ const COLORS = {
   error: '#EF4444',
 };
 
-// NOVO: faz fetch com retry automático caso o servidor responda 503 (indisponibilidade momentânea)
+// Faz fetch com retry automático caso o servidor responda 503 (indisponibilidade momentânea)
 async function fetchComRetry(url: string, tentativas = 2, atrasoMs = 800): Promise<Response> {
   for (let i = 0; i <= tentativas; i++) {
     const resposta = await fetch(url);
@@ -41,7 +41,7 @@ async function fetchComRetry(url: string, tentativas = 2, atrasoMs = 800): Promi
   return fetch(url); // última tentativa, retorna o que vier
 }
 
-// NOVO: extrai o ISBN (13 ou 10) da lista industryIdentifiers que a API do Google Books retorna
+// Extrai o ISBN (13 ou 10) da lista industryIdentifiers que a API do Google Books retorna
 function extrairIsbnGoogle(industryIdentifiers?: { type: string; identifier: string }[]): string {
   if (!industryIdentifiers || industryIdentifiers.length === 0) return '';
   const isbn13 = industryIdentifiers.find((id) => id.type === 'ISBN_13');
@@ -51,7 +51,128 @@ function extrairIsbnGoogle(industryIdentifiers?: { type: string; identifier: str
   return '';
 }
 
-// FUNÇÃO NOVA: Busca notas, páginas e ano silenciosamente
+// ===================== BUSCA POR ISBN EM CASCATA (2 ETAPAS), MESCLANDO SÓ O QUE FALTA =====================
+// Etapa 1: Google Books direto (mais rápido)
+// Etapa 2: BrasilAPI, que por sua vez já consulta CBL + Mercado Editorial + Open Library internamente
+//          (o provedor "google-books" da BrasilAPI é propositalmente excluído aqui, pois a etapa 1 já cobre isso)
+
+interface DadosLivroISBN {
+  titulo: string;
+  autor: string;
+  categoria: string;
+  sinopse: string;
+  capaUrl: string;
+}
+
+function criarDadosVazios(): DadosLivroISBN {
+  return { titulo: '', autor: '', categoria: '', sinopse: '', capaUrl: '' };
+}
+
+// Retorna quais campos ainda estão vazios
+function camposFaltantes(dados: DadosLivroISBN): (keyof DadosLivroISBN)[] {
+  return (Object.keys(dados) as (keyof DadosLivroISBN)[]).filter((chave) => !dados[chave]?.trim());
+}
+
+// Preenche em "atual" apenas os campos que ainda estão vazios, usando os valores de "novos"
+// (nunca sobrescreve um campo que uma fonte anterior já preencheu)
+function mesclarCamposFaltantes(atual: DadosLivroISBN, novos: Partial<DadosLivroISBN>): DadosLivroISBN {
+  const resultado = { ...atual };
+  (Object.keys(novos) as (keyof DadosLivroISBN)[]).forEach((chave) => {
+    if (!resultado[chave]?.trim() && novos[chave]?.trim()) {
+      resultado[chave] = novos[chave]!.trim();
+    }
+  });
+  return resultado;
+}
+
+// Etapa 1: Google Books
+async function buscarNoGoogleBooksPorISBN(isbnLimpo: string): Promise<Partial<DadosLivroISBN> | null> {
+  try {
+    const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbnLimpo}&key=${process.env.EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY}`;
+    const resposta = await fetchComRetry(url);
+    if (!resposta.ok) return null;
+
+    const dados = await resposta.json();
+    const item = dados?.items?.[0];
+    if (!item) return null;
+
+    const info = item.volumeInfo || {};
+    const capa = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || '';
+
+    return {
+      titulo: info.title || '',
+      autor: info.authors ? info.authors.join(', ') : '',
+      categoria: info.categories && info.categories.length > 0 ? info.categories[0] : '',
+      sinopse: info.description || '',
+      capaUrl: capa ? capa.replace('http://', 'https://') : '',
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// Etapa 2: BrasilAPI (cobre CBL + Mercado Editorial + Open Library; google-books excluído de propósito)
+async function buscarNaBrasilApiPorISBN(
+  isbnLimpo: string
+): Promise<{ dados: Partial<DadosLivroISBN>; provedor?: string } | null> {
+  try {
+    const resposta = await fetch(
+      `https://brasilapi.com.br/api/isbn/v1/${isbnLimpo}?providers=mercado-editorial,open-library`
+    );
+    if (resposta.status !== 200) return null;
+
+    const dados = await resposta.json();
+
+    return {
+      dados: {
+        titulo: dados.title || '',
+        autor: dados.authors ? dados.authors.join(', ') : '',
+        categoria: dados.subjects && dados.subjects.length > 0 ? dados.subjects[0] : '',
+        sinopse: dados.synopsis || '',
+        capaUrl: dados.cover_url ? String(dados.cover_url).replace('http://', 'https://') : '',
+      },
+      provedor: dados.provider,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// Orquestrador: Google Books -> BrasilAPI, mesclando apenas os campos ainda ausentes
+async function buscarDadosPorISBNMesclado(
+  isbnLimpo: string
+): Promise<{ dados: DadosLivroISBN; encontradoEm: string[] } | null> {
+  let dados = criarDadosVazios();
+  const encontradoEm: string[] = [];
+
+  // 1. Google Books primeiro
+  const google = await buscarNoGoogleBooksPorISBN(isbnLimpo);
+  if (google) {
+    dados = mesclarCamposFaltantes(dados, google);
+    encontradoEm.push('Google Books');
+  }
+
+  // 2. Se sobrou campo vazio, tenta a BrasilAPI só pra completar
+  if (camposFaltantes(dados).length > 0) {
+    const resultadoBrasil = await buscarNaBrasilApiPorISBN(isbnLimpo);
+    if (resultadoBrasil) {
+      const antes = camposFaltantes(dados).length;
+      dados = mesclarCamposFaltantes(dados, resultadoBrasil.dados);
+      if (camposFaltantes(dados).length < antes) {
+        encontradoEm.push(resultadoBrasil.provedor ? `BrasilAPI/${resultadoBrasil.provedor}` : 'BrasilAPI');
+      }
+    }
+  }
+
+  // Se nem o título foi encontrado em nenhuma fonte, consideramos "não encontrado"
+  if (!dados.titulo) return null;
+
+  return { dados, encontradoEm };
+}
+
+// ===================== FIM DO BLOCO DE BUSCA POR ISBN =====================
+
+// Busca notas, páginas e ano silenciosamente (usada só no momento de salvar, sem mudanças aqui)
 async function obterDadosExtrasPorISBN(isbnBase: string) {
   if (!isbnBase) return { nota_media: 0, total_avaliacoes: 0, paginas: null, ano: null };
 
@@ -64,20 +185,17 @@ async function obterDadosExtrasPorISBN(isbnBase: string) {
   };
 
   try {
-    // 1. Busca a edição para pegar páginas, ano e a chave da obra
     const respostaEdicao = await fetch(`https://openlibrary.org/isbn/${isbnLimpo}.json`);
     if (!respostaEdicao.ok) return dadosExtras;
 
     const dadosEdicao = await respostaEdicao.json();
 
-    // Captura páginas e ano (usando Regex para extrair apenas os 4 dígitos do ano)
     if (dadosEdicao.number_of_pages) dadosExtras.paginas = parseInt(dadosEdicao.number_of_pages);
     if (dadosEdicao.publish_date) {
        const matchAno = dadosEdicao.publish_date.match(/\d{4}/);
        if (matchAno) dadosExtras.ano = parseInt(matchAno[0]);
     }
 
-    // 2. Busca a nota usando a chave da Obra (Work)
     if (dadosEdicao.works && dadosEdicao.works.length > 0) {
       const workKey = dadosEdicao.works[0].key;
       const respostaNotas = await fetch(`https://openlibrary.org${workKey}/ratings.json`);
@@ -98,7 +216,6 @@ async function obterDadosExtrasPorISBN(isbnBase: string) {
 }
 
 export default function AdicionarLivroScreen({ navigation }: any) {
-  // Estados do formulário
   const [termoBusca, setTermoBusca] = useState('');
   const [isbn, setIsbn] = useState('');
   const [titulo, setTitulo] = useState('');
@@ -108,25 +225,20 @@ export default function AdicionarLivroScreen({ navigation }: any) {
   const [capaUrl, setCapaUrl] = useState('');
   const [quantidade, setQuantidade] = useState('1');
 
-  // Estados para o Autocomplete de Categoria
   const [categoriasDB, setCategoriasDB] = useState<string[]>([]);
   const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
 
-  // Estados para seleção de edição/versão
   const [resultadosBusca, setResultadosBusca] = useState<any[]>([]);
   const [isModalEdicaoVisible, setIsModalEdicaoVisible] = useState(false);
 
-  // Estados de controle da câmera e requisições
   const [permission, requestPermission] = useCameraPermissions();
   const [isScanning, setIsScanning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   
-  // Estados: Flash da câmera e Trava anti-duplicação
   const [torch, setTorch] = useState(false);
   const [scannedLock, setScannedLock] = useState(false);
 
-  // Busca inicial das Categorias existentes no banco
   useEffect(() => {
     async function fetchCategorias() {
       try {
@@ -141,7 +253,6 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     fetchCategorias();
   }, []);
 
-  // Lógica de filtro do Autocomplete
   const categoriasFiltradas = categoriasDB.filter((cat) =>
     cat.toLowerCase().includes(categoria.toLowerCase())
   );
@@ -164,12 +275,13 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     setCategoria('');
     setSinopse('');
     setCapaUrl('');
-    setIsbn(isIsbn ? queryLimpa : ''); // limpa o ISBN também quando a busca é por texto, evitando resíduo da busca anterior
+    setIsbn(isIsbn ? queryLimpa : '');
 
     setLoading(true);
     setIsScanning(false);
     setTorch(false);
 
+    // --- BUSCA POR TEXTO (Google Books, com seleção de edição via modal) ---
     if (!isIsbn) {
       try {
         const termoLimpo = queryFinal.trim();
@@ -205,118 +317,59 @@ export default function AdicionarLivroScreen({ navigation }: any) {
       return;
     }
 
+    // --- BUSCA POR ISBN (escaneado ou digitado): Google Books -> BrasilAPI ---
     try {
-      const urlOpenLibrary = `https://openlibrary.org/api/books?bibkeys=ISBN:${queryFinal}&jscmd=data&format=json`;
-      const response = await fetch(urlOpenLibrary);
-      const data = await response.json();
-      const chaveLivro = `ISBN:${queryFinal}`;
+      const resultado = await buscarDadosPorISBNMesclado(queryFinal);
 
-      if (data && data[chaveLivro]) {
-        const info = data[chaveLivro];
-        
-        let sinopseExtraida = '';
-        if (info.notes) {
-          sinopseExtraida = typeof info.notes === 'string' ? info.notes : (info.notes.value || '');
-        } else if (info.description) {
-          sinopseExtraida = typeof info.description === 'string' ? info.description : (info.description.value || '');
-        }
-
-        if (!sinopseExtraida.trim()) {
-          try {
-            const respostaBrasil = await fetch(`https://brasilapi.com.br/api/isbn/v1/${queryFinal}`);
-            if (respostaBrasil.status === 200) {
-              const dadosBrasil = await respostaBrasil.json();
-              sinopseExtraida = dadosBrasil.synopsis || '';
-            }
-          } catch (e) {}
-        }
-
-        const livroFormatado = {
-          title: info.title || '',
-          authors: info.authors || [],
-          subjects: info.subjects || [],
-          notes: sinopseExtraida || 'Sem sinopse disponível.',
-          cover: info.cover
-        };
-
-        selecionarVolume(livroFormatado);
-        Alert.alert('Sucesso!', 'Livro localizado pelo ISBN!');
-        
+      if (resultado) {
+        aplicarDadosISBN(resultado.dados);
+        Alert.alert('Sucesso!', `Livro localizado (${resultado.encontradoEm.join(' + ')})!`);
       } else {
-        try {
-          const respostaBrasil = await fetch(`https://brasilapi.com.br/api/isbn/v1/${queryFinal}`);
-          if (respostaBrasil.status === 200) {
-            const dadosBrasil = await respostaBrasil.json();
-            
-            const livroBrasil = {
-              title: dadosBrasil.title || '',
-              authors: dadosBrasil.authors ? dadosBrasil.authors.map((a: string) => ({ name: a })) : [],
-              subjects: dadosBrasil.subjects ? dadosBrasil.subjects.map((s: string) => ({ name: s })) : [],
-              notes: dadosBrasil.synopsis || 'Sem sinopse disponível.',
-              cover: null 
-            };
-
-            selecionarVolume(livroBrasil);
-            Alert.alert('Sucesso!', 'Livro localizado na base nacional!');
-            return;
-          }
-        } catch (e) {}
-
         Alert.alert(
           'Não encontrado',
-          'O ISBN não foi encontrado nos catálogos automáticos. Insira os dados manualmente.',
+          'O ISBN não foi encontrado em nenhum catálogo automático (Google Books, BrasilAPI). Insira os dados manualmente.',
           [{ text: 'Ok, digitar' }]
         );
       }
     } catch (error) {
-      Alert.alert('Erro', 'Não foi possível conectar aos serviços de busca mundial.');
+      Alert.alert('Erro', 'Não foi possível conectar aos serviços de busca. Verifique sua internet.');
     } finally {
       setLoading(false);
     }
   }
 
+  // Aplica no formulário os dados já mesclados vindos da busca por ISBN
+  function aplicarDadosISBN(dados: DadosLivroISBN) {
+    setTitulo(dados.titulo);
+    setAutor(dados.autor || 'Desconhecido');
+    setCategoria(dados.categoria || 'Geral');
+    setSinopse(dados.sinopse || 'Sem sinopse disponível.');
+    setCapaUrl(dados.capaUrl);
+    setMostrarSugestoes(false);
+  }
+
+  // Usada apenas na seleção de edição da busca por TEXTO (modal do Google Books)
   function selecionarVolume(volumeInfo: any) {
-    const ehIsbn = 'notes' in volumeInfo;
-
     setTitulo(volumeInfo.title || '');
+    setIsbn(extrairIsbnGoogle(volumeInfo.industryIdentifiers));
 
-    // NOVO: extrai o ISBN quando o resultado vem da busca por texto (Google Books)
-    if (!ehIsbn) {
-      setIsbn(extrairIsbnGoogle(volumeInfo.industryIdentifiers));
-    }
-    // quando ehIsbn é true (veio do escaneamento/busca por ISBN), o isbn já foi setado antes em buscarLivro()
-    
     if (volumeInfo.authors) {
-      if (typeof volumeInfo.authors[0] === 'string') {
-        setAutor(volumeInfo.authors.join(', '));
-      } else if (volumeInfo.authors[0]?.name) {
-        setAutor(volumeInfo.authors.map((a: any) => a.name).join(', '));
-      }
+      setAutor(volumeInfo.authors.join(', '));
     } else {
       setAutor('Desconhecido');
     }
-    
-    // Configura a categoria escaneada
-    if (ehIsbn) {
-      setCategoria(volumeInfo.subjects && volumeInfo.subjects.length > 0 ? volumeInfo.subjects[0].name : 'Geral');
-    } else {
-      setCategoria(volumeInfo.categories && volumeInfo.categories.length > 0 ? volumeInfo.categories[0] : 'Geral');
-    }
-    
-    // Garante que o menu de sugestões não abra sozinho após o escaneamento
-    setMostrarSugestoes(false); 
-      
-    setSinopse(ehIsbn ? (volumeInfo.notes || 'Sem sinopse disponível.') : (volumeInfo.description || 'Sem sinopse disponível.'));
-    
-    if (!ehIsbn && volumeInfo.imageLinks) {
+
+    setCategoria(volumeInfo.categories && volumeInfo.categories.length > 0 ? volumeInfo.categories[0] : 'Geral');
+    setMostrarSugestoes(false);
+    setSinopse(volumeInfo.description || 'Sem sinopse disponível.');
+
+    if (volumeInfo.imageLinks) {
       const capa = volumeInfo.imageLinks.thumbnail || volumeInfo.imageLinks.smallThumbnail;
       setCapaUrl(capa ? capa.replace('http://', 'https://') : '');
-    } else if (ehIsbn && volumeInfo.cover?.medium) {
-      setCapaUrl(volumeInfo.cover.medium.replace('http://', 'https://'));
     } else {
       setCapaUrl('');
     }
-    
+
     setIsModalEdicaoVisible(false);
   }
 
@@ -334,7 +387,6 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     setIsScanning(true);
   };
 
-  // NOVA FUNÇÃO: limpa o formulário (extraída para reaproveitar tanto no fluxo de livro novo quanto no de soma de estoque)
   function limparFormulario() {
     setTitulo('');
     setAutor('');
@@ -347,7 +399,6 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     setMostrarSugestoes(false);
   }
 
-  // NOVA FUNÇÃO: soma quantidade a um livro que já existe (mesmo ISBN) em vez de duplicar
   async function somarEstoqueExistente(
     livroId: string,
     totalAtual: number,
@@ -386,14 +437,10 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     
     setSaving(true);
     
-    // Math.max garante que nunca vai um numero negativo ou zero pro banco
     const qtd = Math.max(1, parseInt(quantidade) || 1);
     const categoriaFinal = categoria.trim() === '' ? 'Geral' : categoria.trim();
-
-    // NOVO: normaliza string vazia para null (evita colisão de UNIQUE constraint entre livros sem ISBN)
     const isbnFinal = isbn.trim() === '' ? null : isbn.trim();
 
-    // --- NOVO: verifica se esse ISBN já existe no acervo antes de inserir ---
     if (isbnFinal) {
       try {
         const { data: existente, error: erroConsulta } = await supabase
@@ -430,7 +477,6 @@ export default function AdicionarLivroScreen({ navigation }: any) {
       }
     }
 
-    // --- BUSCA OS DADOS EXTRAS ANTES DE SALVAR (só roda se for livro novo) ---
     let dadosExtras = { 
       nota_media: 0, 
       total_avaliacoes: 0, 
@@ -442,7 +488,6 @@ export default function AdicionarLivroScreen({ navigation }: any) {
       dadosExtras = await obterDadosExtrasPorISBN(isbnFinal);
     }
 
-    // Objeto atualizado com as novas colunas
     const livroData = {
       titulo,
       autor,
@@ -577,7 +622,6 @@ export default function AdicionarLivroScreen({ navigation }: any) {
           <TextInput style={styles.input} placeholder="Nome do autor..." value={autor} onChangeText={setAutor} />
         </View>
 
-        {/* --- MODIFICAÇÃO PRINCIPAL: LINHA DE CATEGORIA E ESTOQUE COM AUTOCOMPLETE --- */}
         <View style={[styles.row, { zIndex: 10 }]}> 
           <View style={[styles.inputGroup, { flex: 2, position: 'relative', zIndex: 10 }]}>
             <Text style={styles.label}>Categoria</Text>
@@ -590,11 +634,9 @@ export default function AdicionarLivroScreen({ navigation }: any) {
                 setMostrarSugestoes(true);
               }}
               onFocus={() => setMostrarSugestoes(true)}
-              // onBlur com leve atraso permite ao usuário clicar na sugestão sem que ela suma instantaneamente
               onBlur={() => setTimeout(() => setMostrarSugestoes(false), 200)} 
             />
 
-            {/* Menu de Sugestões Dropdown */}
             {mostrarSugestoes && categoria.length > 0 && categoriasFiltradas.length > 0 && (
               <View style={styles.suggestionsContainer}>
                 <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
@@ -603,8 +645,8 @@ export default function AdicionarLivroScreen({ navigation }: any) {
                       key={index}
                       style={styles.suggestionItem}
                       onPress={() => {
-                        setCategoria(item); // Preenche com a grafia oficial
-                        setMostrarSugestoes(false); // Esconde a lista
+                        setCategoria(item);
+                        setMostrarSugestoes(false);
                       }}
                     >
                       <Text style={styles.suggestionText}>{item}</Text>
@@ -643,7 +685,6 @@ export default function AdicionarLivroScreen({ navigation }: any) {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* MODAL DE EDIÇÕES */}
       <Modal visible={isModalEdicaoVisible} transparent animationType="slide" onRequestClose={() => setIsModalEdicaoVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -725,22 +766,21 @@ const styles = StyleSheet.create({
   txtDetalhesEdicao: { fontSize: 12, color: COLORS.onSurfaceVariant, marginTop: 2 },
   txtEditoraHighlight: { fontSize: 12, fontWeight: '600', color: COLORS.primary, marginTop: 2 },
   
-  // ESTILOS NOVOS PARA O MENU SUSPENSO (AUTOCOMPLETE)
   suggestionsContainer: {
     position: 'absolute',
-    top: 70, // Fica perfeitamente abaixo do input da Categoria
+    top: 70,
     left: 0,
     right: 0,
     backgroundColor: COLORS.surface,
     borderWidth: 1,
     borderColor: COLORS.outlineVariant,
     borderRadius: 8,
-    elevation: 5, // Sombra para Android
-    shadowColor: '#000', // Sombra para iOS
+    elevation: 5,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
     shadowRadius: 4,
-    maxHeight: 180, // Limita a altura para não poluir a tela
+    maxHeight: 180,
   },
   suggestionItem: {
     paddingVertical: 12,
