@@ -31,6 +31,26 @@ const COLORS = {
   error: '#EF4444',
 };
 
+// NOVO: faz fetch com retry automático caso o servidor responda 503 (indisponibilidade momentânea)
+async function fetchComRetry(url: string, tentativas = 2, atrasoMs = 800): Promise<Response> {
+  for (let i = 0; i <= tentativas; i++) {
+    const resposta = await fetch(url);
+    if (resposta.status !== 503) return resposta;
+    if (i < tentativas) await new Promise((r) => setTimeout(r, atrasoMs * (i + 1)));
+  }
+  return fetch(url); // última tentativa, retorna o que vier
+}
+
+// NOVO: extrai o ISBN (13 ou 10) da lista industryIdentifiers que a API do Google Books retorna
+function extrairIsbnGoogle(industryIdentifiers?: { type: string; identifier: string }[]): string {
+  if (!industryIdentifiers || industryIdentifiers.length === 0) return '';
+  const isbn13 = industryIdentifiers.find((id) => id.type === 'ISBN_13');
+  if (isbn13) return isbn13.identifier;
+  const isbn10 = industryIdentifiers.find((id) => id.type === 'ISBN_10');
+  if (isbn10) return isbn10.identifier;
+  return '';
+}
+
 // FUNÇÃO NOVA: Busca notas, páginas e ano silenciosamente
 async function obterDadosExtrasPorISBN(isbnBase: string) {
   if (!isbnBase) return { nota_media: 0, total_avaliacoes: 0, paginas: null, ano: null };
@@ -144,7 +164,7 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     setCategoria('');
     setSinopse('');
     setCapaUrl('');
-    if (isIsbn) setIsbn(queryLimpa);
+    setIsbn(isIsbn ? queryLimpa : ''); // limpa o ISBN também quando a busca é por texto, evitando resíduo da busca anterior
 
     setLoading(true);
     setIsScanning(false);
@@ -154,10 +174,17 @@ export default function AdicionarLivroScreen({ navigation }: any) {
       try {
         const termoLimpo = queryFinal.trim();
         const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(termoLimpo)}&maxResults=5&key=${process.env.EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY}`;        
-        const response = await fetch(url);
+        const response = await fetchComRetry(url);
         
         if (!response.ok) {
-          Alert.alert('Erro', `O servidor do Google respondeu com erro ${response.status}`);
+          let detalhe = '';
+          try {
+            const corpoErro = await response.json();
+            detalhe = corpoErro?.error?.message || '';
+            console.log('Detalhe do erro Google Books:', JSON.stringify(corpoErro));
+          } catch (e) {}
+
+          Alert.alert('Erro', `O servidor do Google respondeu com erro ${response.status}${detalhe ? `: ${detalhe}` : ''}`);
           setLoading(false);
           return;
         }
@@ -252,6 +279,12 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     const ehIsbn = 'notes' in volumeInfo;
 
     setTitulo(volumeInfo.title || '');
+
+    // NOVO: extrai o ISBN quando o resultado vem da busca por texto (Google Books)
+    if (!ehIsbn) {
+      setIsbn(extrairIsbnGoogle(volumeInfo.industryIdentifiers));
+    }
+    // quando ehIsbn é true (veio do escaneamento/busca por ISBN), o isbn já foi setado antes em buscarLivro()
     
     if (volumeInfo.authors) {
       if (typeof volumeInfo.authors[0] === 'string') {
@@ -301,6 +334,50 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     setIsScanning(true);
   };
 
+  // NOVA FUNÇÃO: limpa o formulário (extraída para reaproveitar tanto no fluxo de livro novo quanto no de soma de estoque)
+  function limparFormulario() {
+    setTitulo('');
+    setAutor('');
+    setCategoria('');
+    setSinopse('');
+    setCapaUrl('');
+    setQuantidade('1');
+    setIsbn('');
+    setTermoBusca('');
+    setMostrarSugestoes(false);
+  }
+
+  // NOVA FUNÇÃO: soma quantidade a um livro que já existe (mesmo ISBN) em vez de duplicar
+  async function somarEstoqueExistente(
+    livroId: string,
+    totalAtual: number,
+    disponivelAtual: number,
+    qtdAdicionar: number
+  ) {
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from('livros')
+        .update({
+          quantidade_total: totalAtual + qtdAdicionar,
+          quantidade_disponivel: disponivelAtual + qtdAdicionar,
+        })
+        .eq('id', livroId);
+
+      if (error) {
+        Alert.alert('Erro do Banco', error.message);
+        return;
+      }
+
+      Alert.alert('Sucesso!', `Estoque atualizado: +${qtdAdicionar} exemplar(es).`);
+      limparFormulario();
+    } catch (err: any) {
+      Alert.alert('Erro inesperado', err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleSalvarLivro() {
     if (!titulo || !autor) {
       Alert.alert('Erro', 'Título e Autor são obrigatórios.');
@@ -309,11 +386,51 @@ export default function AdicionarLivroScreen({ navigation }: any) {
     
     setSaving(true);
     
-    const qtd = parseInt(quantidade) || 1;
+    // Math.max garante que nunca vai um numero negativo ou zero pro banco
+    const qtd = Math.max(1, parseInt(quantidade) || 1);
     const categoriaFinal = categoria.trim() === '' ? 'Geral' : categoria.trim();
 
-    // --- NOVO: BUSCA OS DADOS EXTRAS ANTES DE SALVAR ---
-    // --- ATUALIZADO: Tipagem explícita para evitar o erro do TS ---
+    // NOVO: normaliza string vazia para null (evita colisão de UNIQUE constraint entre livros sem ISBN)
+    const isbnFinal = isbn.trim() === '' ? null : isbn.trim();
+
+    // --- NOVO: verifica se esse ISBN já existe no acervo antes de inserir ---
+    if (isbnFinal) {
+      try {
+        const { data: existente, error: erroConsulta } = await supabase
+          .from('livros')
+          .select('id, titulo, quantidade_total, quantidade_disponivel')
+          .eq('isbn', isbnFinal)
+          .maybeSingle();
+
+        if (erroConsulta) {
+          Alert.alert('Erro ao verificar acervo', erroConsulta.message);
+          setSaving(false);
+          return;
+        }
+
+        if (existente) {
+          setSaving(false);
+          Alert.alert(
+            'Livro já cadastrado',
+            `"${existente.titulo}" já existe no acervo com ${existente.quantidade_total} exemplar(es). Deseja somar ${qtd} exemplar(es) ao estoque existente?`,
+            [
+              { text: 'Cancelar', style: 'cancel' },
+              {
+                text: `Somar ${qtd} ao estoque`,
+                onPress: () => somarEstoqueExistente(existente.id, existente.quantidade_total, existente.quantidade_disponivel, qtd),
+              },
+            ]
+          );
+          return;
+        }
+      } catch (err: any) {
+        Alert.alert('Erro inesperado', err.message);
+        setSaving(false);
+        return;
+      }
+    }
+
+    // --- BUSCA OS DADOS EXTRAS ANTES DE SALVAR (só roda se for livro novo) ---
     let dadosExtras = { 
       nota_media: 0, 
       total_avaliacoes: 0, 
@@ -321,8 +438,8 @@ export default function AdicionarLivroScreen({ navigation }: any) {
       ano: null as number | null 
     };
 
-    if (isbn) {
-      dadosExtras = await obterDadosExtrasPorISBN(isbn);
+    if (isbnFinal) {
+      dadosExtras = await obterDadosExtrasPorISBN(isbnFinal);
     }
 
     // Objeto atualizado com as novas colunas
@@ -334,7 +451,7 @@ export default function AdicionarLivroScreen({ navigation }: any) {
       capa_url: capaUrl,
       quantidade_total: qtd,
       quantidade_disponivel: qtd,
-      isbn: isbn,
+      isbn: isbnFinal,
       nota_media: dadosExtras.nota_media,
       total_avaliacoes: dadosExtras.total_avaliacoes,
       paginas: dadosExtras.paginas,
@@ -355,16 +472,7 @@ export default function AdicionarLivroScreen({ navigation }: any) {
       
       Alert.alert('Sucesso!', 'Livro adicionado ao acervo.');
       
-      // Limpa os campos após o sucesso
-      setTitulo('');
-      setAutor('');
-      setCategoria('');
-      setSinopse('');
-      setCapaUrl('');
-      setQuantidade('1'); 
-      setIsbn('');
-      setTermoBusca(''); 
-      setMostrarSugestoes(false);
+      limparFormulario();
       
     } catch (err: any) {
       Alert.alert('Erro inesperado', err.message);
