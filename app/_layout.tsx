@@ -74,22 +74,34 @@ export default function RootLayout() {
   }, [profile, loading]);
 
   async function carregarPerfil(userId: string) {
-  try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
+    try {
+      const { data: perfilData, error: perfilError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
 
-    if (error) throw error;
-    setProfile(data);
-  } catch (e) {
-    console.error('Erro ao carregar perfil:', e);
-    setLoading(false);
-  } finally {
-    setLoading(false);
+      if (perfilError) throw perfilError;
+
+      const { data: roleData, error: roleError } = await supabase
+        .from('user_roles')
+        .select('tipo')
+        .eq('usuario_id', userId)
+        .single();
+
+      if (roleError) throw roleError;
+
+      // Mescla o tipo (agora vindo de user_roles) de volta no objeto profile,
+      // pra não precisar mexer no resto do arquivo — a lógica de roteamento
+      // abaixo continua usando profile.tipo normalmente
+      setProfile({ ...perfilData, tipo: roleData.tipo });
+    } catch (e) {
+      console.error('Erro ao carregar perfil:', e);
+      setLoading(false);
+    } finally {
+      setLoading(false);
+    }
   }
-}
 
   if (!fontsLoaded || loading) {
     return (

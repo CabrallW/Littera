@@ -93,43 +93,50 @@ export default function UsuariosScreen() {
   }, []);
 
   async function fetchAlunos() {
-    setLoading(true);
-    try {
-      const { data: perfis, error: perfisError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('tipo', 'aluno')
-        .order('nome', { ascending: true });
+  setLoading(true);
+  try {
+    const { data: perfis, error: perfisError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('tipo', 'aluno')
+      .order('nome', { ascending: true });
 
-      if (perfisError) throw perfisError;
+    if (perfisError) throw perfisError;
 
-      const { data: emprestimos, error: emprestimosError } = await supabase
-        .from('emprestimos')
-        .select('usuario_id, status')
-        .in('status', ['ativo', 'atrasado']);
+    // Busca só os emprestimos ativos, incluindo o prazo — o atraso não é
+    // um status armazenado, é calculado comparando com a data atual
+    const { data: emprestimos, error: emprestimosError } = await supabase
+      .from('emprestimos')
+      .select('usuario_id, data_devolucao_prevista')
+      .eq('status', 'ativo');
 
-      if (emprestimosError) throw emprestimosError;
+    if (emprestimosError) throw emprestimosError;
 
-      const mapa: Record<string, { count: number; atrasado: boolean }> = {};
-      (emprestimos || []).forEach((emp) => {
-        if (!mapa[emp.usuario_id]) mapa[emp.usuario_id] = { count: 0, atrasado: false };
-        mapa[emp.usuario_id].count += 1;
-        if (emp.status === 'atrasado') mapa[emp.usuario_id].atrasado = true;
-      });
+    const agora = new Date();
 
-      const alunosComDados: AlunoComDados[] = (perfis || []).map((aluno) => ({
-        ...aluno,
-        emprestimosAtivos: mapa[aluno.id]?.count ?? 0,
-        pendente: mapa[aluno.id]?.atrasado ?? false,
-      }));
+    const mapa: Record<string, { count: number; atrasado: boolean }> = {};
+    (emprestimos || []).forEach((emp) => {
+      if (!mapa[emp.usuario_id]) mapa[emp.usuario_id] = { count: 0, atrasado: false };
+      mapa[emp.usuario_id].count += 1;
 
-      setAlunos(alunosComDados);
-    } catch (error) {
-      console.error('Erro ao buscar alunos:', error);
-    } finally {
-      setLoading(false);
-    }
+      if (emp.data_devolucao_prevista && new Date(emp.data_devolucao_prevista) < agora) {
+        mapa[emp.usuario_id].atrasado = true;
+      }
+    });
+
+    const alunosComDados: AlunoComDados[] = (perfis || []).map((aluno) => ({
+      ...aluno,
+      emprestimosAtivos: mapa[aluno.id]?.count ?? 0,
+      pendente: mapa[aluno.id]?.atrasado ?? false,
+    }));
+
+    setAlunos(alunosComDados);
+  } catch (error) {
+    console.error('Erro ao buscar alunos:', error);
+  } finally {
+    setLoading(false);
   }
+}
 
   const filteredAlunos = useMemo(() => {
     return alunos.filter((aluno) => {

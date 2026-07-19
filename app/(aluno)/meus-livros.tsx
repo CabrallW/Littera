@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { Emprestimo } from '../../lib/types';
+import * as DocumentPicker from 'expo-document-picker';
+import { useRouter } from 'expo-router';
 
 type TabId = 'emprestimos' | 'digital' | 'historico';
 
@@ -93,6 +95,8 @@ export default function MeusLivrosScreen() {
   const [emprestimosAtivos, setEmprestimosAtivos] = useState<any[]>([]);
   const [historico, setHistorico] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  const router = useRouter();
 
   useEffect(() => {
     carregarDados();
@@ -125,6 +129,28 @@ export default function MeusLivrosScreen() {
       console.error('Erro ao carregar empréstimos:', e);
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Função que abre o celular do aluno
+  async function abrirArquivoLocal() {
+    try {
+      const resultado = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'application/epub+zip'],
+        copyToCacheDirectory: true,
+      });
+
+      if (!resultado.canceled && resultado.assets.length > 0) {
+        const arquivo = resultado.assets[0];
+        const extensao = arquivo.name.split('.').pop()?.toLowerCase() || 'pdf';
+
+        router.push({
+          pathname: '/leitura',
+          params: { uri: arquivo.uri, extensao: extensao }
+        });
+      }
+    } catch (erro) {
+      console.error('Erro ao abrir documento:', erro);
     }
   }
 
@@ -187,9 +213,18 @@ export default function MeusLivrosScreen() {
 
           {tabAtiva === 'digital' && (
             <View style={styles.vazio}>
-              <Text style={styles.vazioIcone}>📄</Text>
-              <Text style={styles.vazioTexto}>Nenhum livro digital disponível</Text>
-              <Text style={styles.vazioSub}>Em breve o bibliotecário poderá adicionar PDFs</Text>
+              <Text style={styles.vazioIcone}>📱</Text>
+              <Text style={styles.vazioTexto}>Leitor Offline</Text>
+              <Text style={styles.vazioSub}>
+                Abra apostilas ou livros em PDF que já estão salvos no seu celular.
+              </Text>
+              
+              <TouchableOpacity 
+                style={styles.botaoAbrirArquivo}
+                onPress={abrirArquivoLocal}
+              >
+                <Text style={styles.textoBotaoAbrir}>Abrir arquivo do meu celular</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -263,4 +298,18 @@ const styles = StyleSheet.create({
   vazioIcone: { fontSize: 48 },
   vazioTexto: { fontSize: 16, fontWeight: '600', color: COLORS.onSurface },
   vazioSub: { fontSize: 13, color: COLORS.onSurfaceVariant, textAlign: 'center', paddingHorizontal: 32 },
+  
+  // Adicionados para o botão de abrir arquivo local
+  botaoAbrirArquivo: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 16,
+  },
+  textoBotaoAbrir: {
+    color: COLORS.white,
+    fontWeight: '600',
+    fontSize: 14,
+  }
 });
