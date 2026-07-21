@@ -95,19 +95,32 @@ export default function UsuariosScreen() {
   async function fetchAlunos() {
   setLoading(true);
   try {
+    const { data: rolesAlunos, error: rolesError } = await supabase
+      .from('user_roles')
+      .select('usuario_id')
+      .eq('tipo', 'aluno');
+
+    if (rolesError) throw rolesError;
+
+    const idsAlunos = (rolesAlunos || []).map((r) => r.usuario_id);
+
+    if (idsAlunos.length === 0) {
+      setAlunos([]);
+      setLoading(false);
+      return;
+    }
+
     const { data: perfis, error: perfisError } = await supabase
       .from('profiles')
       .select('*')
-      .eq('tipo', 'aluno')
+      .in('id', idsAlunos)
       .order('nome', { ascending: true });
 
     if (perfisError) throw perfisError;
 
-    // Busca só os emprestimos ativos, incluindo o prazo — o atraso não é
-    // um status armazenado, é calculado comparando com a data atual
     const { data: emprestimos, error: emprestimosError } = await supabase
       .from('emprestimos')
-      .select('usuario_id, data_devolucao_prevista')
+      .select('usuario_id, data_prevista_devolucao')
       .eq('status', 'ativo');
 
     if (emprestimosError) throw emprestimosError;
@@ -119,13 +132,14 @@ export default function UsuariosScreen() {
       if (!mapa[emp.usuario_id]) mapa[emp.usuario_id] = { count: 0, atrasado: false };
       mapa[emp.usuario_id].count += 1;
 
-      if (emp.data_devolucao_prevista && new Date(emp.data_devolucao_prevista) < agora) {
+      if (emp.data_prevista_devolucao && new Date(emp.data_prevista_devolucao) < agora) {
         mapa[emp.usuario_id].atrasado = true;
       }
     });
 
     const alunosComDados: AlunoComDados[] = (perfis || []).map((aluno) => ({
       ...aluno,
+      tipo: 'aluno',
       emprestimosAtivos: mapa[aluno.id]?.count ?? 0,
       pendente: mapa[aluno.id]?.atrasado ?? false,
     }));
