@@ -3,7 +3,18 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as DocumentPicker from 'expo-document-picker';
 
 const CHAVE_STORAGE = '@littera:arquivos_digitais';
-const pastaDestino = new Directory(Paths.document, 'livros-digitais');
+
+// IMPORTANTE: a pasta de destino é criada dentro de uma função (lazy),
+// e não como constante no topo do módulo. `Paths.document` só existe
+// em iOS/Android — se isso rodasse na hora do import (como constante
+// de módulo), quebraria o bundle inteiro no web com
+// "this.validatePath is not a function", mesmo em telas que nunca
+// chamam essa função. Esta tela (importação de PDF/EPUB) já é
+// exclusiva do app mobile, então isso nunca é chamado no web — mas
+// o import do módulo em si precisa continuar seguro.
+function obterPastaDestino() {
+  return new Directory(Paths.document, 'livros-digitais');
+}
 
 export type ArquivoDigital = {
   id: string;
@@ -50,6 +61,7 @@ export async function escolherEImportarArquivo(): Promise<ArquivoDigital | null>
   }
 
   // Garante que a pasta de destino existe dentro do sandbox do app
+  const pastaDestino = obterPastaDestino();
   if (!pastaDestino.exists) {
     pastaDestino.create();
   }

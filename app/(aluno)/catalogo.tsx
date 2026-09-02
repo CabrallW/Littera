@@ -135,6 +135,12 @@ export default function CatalogoScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
+      {/* Cabeçalho do App (provisório) */}
+      <View style={styles.appHeader}>
+        <MaterialCommunityIcons name="book-education" size={22} color={COLORS.primary} />
+        <Text style={styles.appName}>Littera</Text>
+      </View>
+
       {/* Search Bar */}
       <View style={styles.searchSection}>
         <View style={styles.searchBar}>
@@ -219,6 +225,19 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+  },
+  appHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: PADDING,
+    paddingTop: 8,
+  },
+  appName: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: COLORS.primary,
+    letterSpacing: 0.3,
   },
   searchSection: { paddingHorizontal: PADDING, paddingVertical: 12 },
   searchBar: {
