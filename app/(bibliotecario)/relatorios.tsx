@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,8 +8,22 @@ import {
   StatusBar,
   Platform,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import {
+  Periodo,
+  EstatisticasGerais,
+  PontoGrafico,
+  LeitorRanking,
+  TurmaAgregada,
+  CategoriaAgregada,
+  buscarEstatisticasGerais,
+  buscarDadosGrafico,
+  buscarRankingLeitores,
+  buscarLeiturasPorTurma,
+  buscarCategoriasMaisLidas,
+} from '../../lib/relatoriosData';
 
 const PADDING = 20;
 const BREAKPOINT_DESKTOP = 768;
@@ -29,74 +43,12 @@ const COLORS = {
   successContainer: '#D1FAE5',
   error: '#EF4444',
   warning: '#F59E0B',
-  warningContainer: '#FEF3C7',
   gold: '#F59E0B',
   silver: '#9CA3AF',
   bronze: '#B45309',
 };
 
-// ─────────────────────────────────────────────────────────
-// DADOS FICTÍCIOS (mock) — substituir por consultas reais
-// ao Supabase quando o módulo de relatórios for integrado.
-// ─────────────────────────────────────────────────────────
-
-type Periodo = 'mensal' | 'anual';
-
-const MESES_ABREV = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-const MES_ATUAL_INDEX = 7; // Agosto (0-indexado) — usado para não "inventar" meses futuros
-
-const LEITURAS_POR_MES = [118, 134, 142, 158, 171, 96, 89, 190, 0, 0, 0, 0];
-const LEITURAS_POR_ANO = [
-  { label: '2022', valor: 980 },
-  { label: '2023', valor: 1240 },
-  { label: '2024', valor: 1450 },
-  { label: '2025', valor: 1680 },
-  { label: '2026', valor: 1290 },
-];
-
-const RANKING_LEITORES = [
-  { nome: 'Maria Eduarda Silva', turma: '6º Ano A', livros: 34 },
-  { nome: 'João Pedro Santos', turma: '9º Ano B', livros: 29 },
-  { nome: 'Ana Clara Oliveira', turma: '7º Ano C', livros: 27 },
-  { nome: 'Lucas Gabriel Costa', turma: '8º Ano A', livros: 25 },
-  { nome: 'Beatriz Almeida', turma: '5º Ano B', livros: 22 },
-];
-
-const LEITURAS_POR_TURMA = [
-  { turma: '6º Ano A', livros: 210 },
-  { turma: '7º Ano A', livros: 195 },
-  { turma: '6º Ano B', livros: 178 },
-  { turma: '7º Ano B', livros: 160 },
-  { turma: '8º Ano A', livros: 145 },
-  { turma: '9º Ano A', livros: 132 },
-];
-
-const CATEGORIAS_MAIS_LIDAS = [
-  { nome: 'Ficção', percentual: 34, cor: COLORS.primary },
-  { nome: 'Aventura', percentual: 22, cor: COLORS.success },
-  { nome: 'Romance', percentual: 18, cor: '#EC4899' },
-  { nome: 'Biografias', percentual: 14, cor: COLORS.warning },
-  { nome: 'Outros', percentual: 12, cor: COLORS.outline },
-];
-
-const STATS = {
-  mensal: {
-    totalLivros: 190,
-    participantesAtivos: 231,
-    totalAlunos: 480,
-    mediaPorAluno: 1.8,
-    tendencia: 11, // % vs mês anterior
-  },
-  anual: {
-    totalLivros: 1290,
-    participantesAtivos: 402,
-    totalAlunos: 480,
-    mediaPorAluno: 3.2,
-    tendencia: 18, // % vs mesmo período do ano anterior
-  },
-};
-
-// ─────────────────────────────────────────────────────────
+const CORES_CATEGORIA = ['#1E3A8A', '#10B981', '#EC4899', '#F59E0B', '#79747E', '#8B5CF6', '#06B6D4'];
 
 function StatCard({
   icon,
@@ -112,13 +64,7 @@ function StatCard({
   desktop?: boolean;
 }) {
   return (
-    <View
-      style={[
-        styles.statCard,
-        destaque && styles.statCardDestaque,
-        desktop && styles.statCardDesktop,
-      ]}
-    >
+    <View style={[styles.statCard, destaque && styles.statCardDestaque, desktop && styles.statCardDesktop]}>
       <View style={[styles.statIconWrap, destaque && styles.statIconWrapDestaque]}>{icon}</View>
       <Text style={[styles.statValor, destaque && styles.statValorDestaque, desktop && styles.statValorDesktop]}>
         {valor}
@@ -138,45 +84,61 @@ function BarraProgresso({ percentual, cor }: { percentual: number; cor: string }
 
 export default function RelatoriosScreen() {
   const [periodo, setPeriodo] = useState<Periodo>('mensal');
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
+
+  const [stats, setStats] = useState<EstatisticasGerais | null>(null);
+  const [grafico, setGrafico] = useState<PontoGrafico[]>([]);
+  const [ranking, setRanking] = useState<LeitorRanking[]>([]);
+  const [turmas, setTurmas] = useState<TurmaAgregada[]>([]);
+  const [categorias, setCategorias] = useState<CategoriaAgregada[]>([]);
+
   const { width } = useWindowDimensions();
   const isDesktop = width >= BREAKPOINT_DESKTOP;
 
-  const stats = STATS[periodo];
-  const participacaoPercentual = Math.round((stats.participantesAtivos / stats.totalAlunos) * 100);
-
-  const dadosGrafico = useMemo(() => {
-    if (periodo === 'mensal') {
-      const max = Math.max(...LEITURAS_POR_MES);
-      return LEITURAS_POR_MES.map((valor, i) => ({
-        label: MESES_ABREV[i],
-        valor,
-        futuro: i > MES_ATUAL_INDEX,
-        atual: i === MES_ATUAL_INDEX,
-        alturaPct: max > 0 ? (valor / max) * 100 : 0,
-      }));
+  const carregarDados = useCallback(async (p: Periodo) => {
+    setLoading(true);
+    setErro(null);
+    try {
+      const [estatisticas, dadosGrafico, rankingLeitores, leiturasPorTurma, categoriasLidas] = await Promise.all([
+        buscarEstatisticasGerais(p),
+        buscarDadosGrafico(p),
+        buscarRankingLeitores(p),
+        buscarLeiturasPorTurma(p),
+        buscarCategoriasMaisLidas(p),
+      ]);
+      setStats(estatisticas);
+      setGrafico(dadosGrafico);
+      setRanking(rankingLeitores);
+      setTurmas(leiturasPorTurma);
+      setCategorias(categoriasLidas);
+    } catch (e) {
+      console.error('Erro ao carregar relatório:', e);
+      setErro('Não foi possível carregar os dados do relatório.');
+    } finally {
+      setLoading(false);
     }
-    const max = Math.max(...LEITURAS_POR_ANO.map((d) => d.valor));
-    return LEITURAS_POR_ANO.map((d, i) => ({
-      label: d.label,
-      valor: d.valor,
-      futuro: false,
-      atual: i === LEITURAS_POR_ANO.length - 1,
-      alturaPct: max > 0 ? (d.valor / max) * 100 : 0,
-    }));
-  }, [periodo]);
+  }, []);
 
-  const maxTurma = Math.max(...LEITURAS_POR_TURMA.map((t) => t.livros));
+  useEffect(() => {
+    carregarDados(periodo);
+  }, [periodo, carregarDados]);
 
-  // ─── Blocos de conteúdo reutilizados nos dois layouts ──────────────
+  const maxGrafico = Math.max(1, ...grafico.map((g) => g.valor));
+  const maxTurma = Math.max(1, ...turmas.map((t) => t.totalLivros));
+  const participacaoPercentual =
+    stats && stats.totalAlunos > 0 ? Math.round((stats.alunosParticipantes / stats.totalAlunos) * 100) : 0;
+
+  // ─── Blocos reutilizados nos dois layouts ──────────────────────────
   const GraficoCard = ({ compactHeight = 150 }: { compactHeight?: number }) => (
     <View style={styles.card}>
       <View style={styles.cardHeaderRow}>
-        <Text style={styles.cardTitulo}>{periodo === 'mensal' ? 'Leituras por mês' : 'Leituras por ano'}</Text>
+        <Text style={styles.cardTitulo}>{periodo === 'mensal' ? 'Empréstimos por mês' : 'Empréstimos por ano'}</Text>
         <MaterialCommunityIcons name="chart-bar" size={18} color={COLORS.outline} />
       </View>
 
       <View style={[styles.grafico, { height: compactHeight }]}>
-        {dadosGrafico.map((item, i) => (
+        {grafico.map((item, i) => (
           <View key={i} style={styles.barraColuna}>
             <Text style={styles.barraValorTopo}>{!item.futuro && item.valor > 0 ? item.valor : ''}</Text>
             <View style={styles.barraArea}>
@@ -184,7 +146,7 @@ export default function RelatoriosScreen() {
                 style={[
                   styles.barra,
                   {
-                    height: `${Math.max(item.alturaPct, item.futuro ? 0 : 3)}%`,
+                    height: `${Math.max((item.valor / maxGrafico) * 100, item.futuro ? 0 : item.valor > 0 ? 3 : 1)}%`,
                     backgroundColor: item.futuro
                       ? COLORS.surfaceVariant
                       : item.atual
@@ -208,10 +170,15 @@ export default function RelatoriosScreen() {
         <MaterialCommunityIcons name="trophy-outline" size={18} color={COLORS.outline} />
       </View>
 
-      {RANKING_LEITORES.map((leitor, i) => {
+      {ranking.length === 0 && (
+        <Text style={styles.vazioTexto}>Nenhum empréstimo registrado neste período.</Text>
+      )}
+
+      {ranking.map((leitor, i) => {
         const corMedalha = i === 0 ? COLORS.gold : i === 1 ? COLORS.silver : i === 2 ? COLORS.bronze : COLORS.outline;
+        const turmaLabel = leitor.serie && leitor.curso ? `${leitor.serie}º ${leitor.curso}` : 'Turma não definida';
         return (
-          <View key={i} style={[styles.rankingLinha, i === RANKING_LEITORES.length - 1 && { borderBottomWidth: 0 }]}>
+          <View key={leitor.usuario_id} style={[styles.rankingLinha, i === ranking.length - 1 && { borderBottomWidth: 0 }]}>
             <View style={[styles.rankingPosicao, { backgroundColor: i < 3 ? corMedalha : COLORS.surfaceVariant }]}>
               <Text style={[styles.rankingPosicaoTexto, { color: i < 3 ? COLORS.onPrimary : COLORS.onSurfaceVariant }]}>
                 {i + 1}
@@ -219,11 +186,11 @@ export default function RelatoriosScreen() {
             </View>
             <View style={styles.rankingInfo}>
               <Text style={styles.rankingNome} numberOfLines={1}>{leitor.nome}</Text>
-              <Text style={styles.rankingTurma}>{leitor.turma}</Text>
+              <Text style={styles.rankingTurma}>{turmaLabel}</Text>
             </View>
             <View style={styles.rankingLivrosWrap}>
               <MaterialCommunityIcons name="book-open-variant" size={13} color={COLORS.primary} />
-              <Text style={styles.rankingLivros}>{leitor.livros}</Text>
+              <Text style={styles.rankingLivros}>{leitor.totalLivros}</Text>
             </View>
           </View>
         );
@@ -234,17 +201,19 @@ export default function RelatoriosScreen() {
   const TurmasCard = () => (
     <View style={styles.card}>
       <View style={styles.cardHeaderRow}>
-        <Text style={styles.cardTitulo}>Leituras por turma</Text>
+        <Text style={styles.cardTitulo}>Empréstimos por turma</Text>
         <Feather name="layers" size={16} color={COLORS.outline} />
       </View>
 
-      {LEITURAS_POR_TURMA.map((item, i) => (
+      {turmas.length === 0 && <Text style={styles.vazioTexto}>Nenhuma turma com empréstimos neste período.</Text>}
+
+      {turmas.map((item, i) => (
         <View key={i} style={styles.turmaLinha}>
           <View style={styles.turmaHeaderLinha}>
-            <Text style={styles.turmaNome}>{item.turma}</Text>
-            <Text style={styles.turmaValor}>{item.livros} livros</Text>
+            <Text style={styles.turmaNome}>{item.serie}º {item.curso}</Text>
+            <Text style={styles.turmaValor}>{item.totalLivros} livros</Text>
           </View>
-          <BarraProgresso percentual={(item.livros / maxTurma) * 100} cor={COLORS.primary} />
+          <BarraProgresso percentual={(item.totalLivros / maxTurma) * 100} cor={COLORS.primary} />
         </View>
       ))}
     </View>
@@ -253,20 +222,22 @@ export default function RelatoriosScreen() {
   const CategoriasCard = ({ marginBottom = 16 }: { marginBottom?: number }) => (
     <View style={[styles.card, { marginBottom }]}>
       <View style={styles.cardHeaderRow}>
-        <Text style={styles.cardTitulo}>Categorias mais lidas</Text>
+        <Text style={styles.cardTitulo}>Categorias mais emprestadas</Text>
         <Feather name="pie-chart" size={16} color={COLORS.outline} />
       </View>
 
-      {CATEGORIAS_MAIS_LIDAS.map((cat, i) => (
+      {categorias.length === 0 && <Text style={styles.vazioTexto}>Sem dados neste período.</Text>}
+
+      {categorias.map((cat, i) => (
         <View key={i} style={styles.turmaLinha}>
           <View style={styles.turmaHeaderLinha}>
             <View style={styles.categoriaLabelWrap}>
-              <View style={[styles.categoriaDot, { backgroundColor: cat.cor }]} />
+              <View style={[styles.categoriaDot, { backgroundColor: CORES_CATEGORIA[i % CORES_CATEGORIA.length] }]} />
               <Text style={styles.turmaNome}>{cat.nome}</Text>
             </View>
             <Text style={styles.turmaValor}>{cat.percentual}%</Text>
           </View>
-          <BarraProgresso percentual={cat.percentual} cor={cat.cor} />
+          <BarraProgresso percentual={cat.percentual} cor={CORES_CATEGORIA[i % CORES_CATEGORIA.length]} />
         </View>
       ))}
     </View>
@@ -293,7 +264,24 @@ export default function RelatoriosScreen() {
     </View>
   );
 
-  // ─── Layout DESKTOP: dashboard em grid, sem tab bar mobile ─────────
+  const conteudoCarregando = (
+    <View style={styles.loadingWrap}>
+      <ActivityIndicator size="large" color={COLORS.primary} />
+      <Text style={styles.loadingTexto}>Carregando relatório...</Text>
+    </View>
+  );
+
+  const conteudoErro = (
+    <View style={styles.loadingWrap}>
+      <Feather name="alert-triangle" size={28} color={COLORS.error} />
+      <Text style={styles.erroTexto}>{erro}</Text>
+      <TouchableOpacity style={styles.tentarNovamenteBtn} onPress={() => carregarDados(periodo)}>
+        <Text style={styles.tentarNovamenteTexto}>Tentar novamente</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  // ─── Layout DESKTOP ─────────────────────────────────────────────────
   if (isDesktop) {
     return (
       <View style={styles.containerDesktop}>
@@ -305,62 +293,79 @@ export default function RelatoriosScreen() {
           <AbasFiltro />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scrollContentDesktop} showsVerticalScrollIndicator={false}>
-          <View style={styles.statsRowDesktop}>
-            <StatCard
-              desktop
-              icon={<MaterialCommunityIcons name="book-open-page-variant" size={20} color={COLORS.onPrimary} />}
-              label={periodo === 'mensal' ? 'Livros lidos no mês' : 'Livros lidos no ano'}
-              valor={String(stats.totalLivros)}
-              destaque
-            />
-            <StatCard
-              desktop
-              icon={<Feather name="users" size={18} color={COLORS.primary} />}
-              label="Alunos participantes"
-              valor={`${participacaoPercentual}%`}
-            />
-            <StatCard
-              desktop
-              icon={<Feather name="trending-up" size={18} color={COLORS.primary} />}
-              label="Média por aluno"
-              valor={stats.mediaPorAluno.toString().replace('.', ',')}
-            />
-            <View style={[styles.tendenciaCardDesktop]}>
-              <View style={styles.statIconWrap}>
-                <Feather name="arrow-up-right" size={18} color={COLORS.success} />
-              </View>
-              <Text style={styles.tendenciaValorDesktop}>+{stats.tendencia}%</Text>
-              <Text style={styles.statLabel}>
-                {periodo === 'mensal' ? 'vs. mês anterior' : 'vs. ano anterior'}
-              </Text>
-            </View>
-          </View>
+        {loading && conteudoCarregando}
+        {!loading && erro && conteudoErro}
 
-          {/* Grid principal: 2 colunas largas + 1 coluna lateral */}
-          <View style={styles.gridDesktop}>
-            <View style={styles.colunaPrincipal}>
-              <GraficoCard compactHeight={220} />
-              <View style={styles.duasColunas}>
-                <View style={styles.metadeColuna}>
-                  <TurmasCard />
+        {!loading && !erro && stats && (
+          <ScrollView contentContainerStyle={styles.scrollContentDesktop} showsVerticalScrollIndicator={false}>
+            <View style={styles.statsRowDesktop}>
+              <StatCard
+                desktop
+                icon={<MaterialCommunityIcons name="book-open-page-variant" size={20} color={COLORS.onPrimary} />}
+                label={periodo === 'mensal' ? 'Livros emprestados no mês' : 'Livros emprestados no ano'}
+                valor={String(stats.totalDevolvidos)}
+                destaque
+              />
+              <StatCard
+                desktop
+                icon={<Feather name="users" size={18} color={COLORS.primary} />}
+                label="Alunos participantes"
+                valor={`${participacaoPercentual}%`}
+              />
+              <StatCard
+                desktop
+                icon={<Feather name="trending-up" size={18} color={COLORS.primary} />}
+                label="Média por aluno"
+                valor={stats.mediaPorAluno.toString().replace('.', ',')}
+              />
+              <View style={styles.tendenciaCardDesktop}>
+                <View style={styles.statIconWrap}>
+                  <Feather
+                    name={stats.tendenciaPercentual !== null && stats.tendenciaPercentual < 0 ? 'arrow-down-right' : 'arrow-up-right'}
+                    size={18}
+                    color={stats.tendenciaPercentual !== null && stats.tendenciaPercentual < 0 ? COLORS.error : COLORS.success}
+                  />
                 </View>
-                <View style={styles.metadeColuna}>
-                  <CategoriasCard marginBottom={0} />
-                </View>
+                <Text
+                  style={[
+                    styles.tendenciaValorDesktop,
+                    stats.tendenciaPercentual !== null && stats.tendenciaPercentual < 0 && { color: COLORS.error },
+                  ]}
+                >
+                  {stats.tendenciaPercentual === null
+                    ? '—'
+                    : `${stats.tendenciaPercentual > 0 ? '+' : ''}${stats.tendenciaPercentual}%`}
+                </Text>
+                <Text style={styles.statLabel}>
+                  {periodo === 'mensal' ? 'vs. mês anterior' : 'vs. ano anterior'}
+                </Text>
               </View>
             </View>
 
-            <View style={styles.colunaLateral}>
-              <RankingCard />
+            <View style={styles.gridDesktop}>
+              <View style={styles.colunaPrincipal}>
+                <GraficoCard compactHeight={220} />
+                <View style={styles.duasColunas}>
+                  <View style={styles.metadeColuna}>
+                    <TurmasCard />
+                  </View>
+                  <View style={styles.metadeColuna}>
+                    <CategoriasCard marginBottom={0} />
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.colunaLateral}>
+                <RankingCard />
+              </View>
             </View>
-          </View>
-        </ScrollView>
+          </ScrollView>
+        )}
       </View>
     );
   }
 
-  // ─── Layout MOBILE: scroll vertical único (igual ao existente) ─────
+  // ─── Layout MOBILE ──────────────────────────────────────────────────
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} />
@@ -372,39 +377,50 @@ export default function RelatoriosScreen() {
 
       <AbasFiltro vertical />
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.statsRow}>
-          <StatCard
-            icon={<MaterialCommunityIcons name="book-open-page-variant" size={18} color={COLORS.onPrimary} />}
-            label={periodo === 'mensal' ? 'Livros lidos no mês' : 'Livros lidos no ano'}
-            valor={String(stats.totalLivros)}
-            destaque
-          />
-          <StatCard
-            icon={<Feather name="users" size={16} color={COLORS.primary} />}
-            label="Alunos participantes"
-            valor={`${participacaoPercentual}%`}
-          />
-          <StatCard
-            icon={<Feather name="trending-up" size={16} color={COLORS.primary} />}
-            label="Média por aluno"
-            valor={stats.mediaPorAluno.toString().replace('.', ',')}
-          />
-        </View>
+      {loading && conteudoCarregando}
+      {!loading && erro && conteudoErro}
 
-        <View style={styles.tendenciaCard}>
-          <Feather name="arrow-up-right" size={14} color={COLORS.success} />
-          <Text style={styles.tendenciaTexto}>
-            <Text style={styles.tendenciaValor}>+{stats.tendencia}%</Text>{' '}
-            {periodo === 'mensal' ? 'em relação ao mês anterior' : 'em relação ao ano anterior'}
-          </Text>
-        </View>
+      {!loading && !erro && stats && (
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.statsRow}>
+            <StatCard
+              icon={<MaterialCommunityIcons name="book-open-page-variant" size={18} color={COLORS.onPrimary} />}
+              label={periodo === 'mensal' ? 'Emprestados no mês' : 'Emprestados no ano'}
+              valor={String(stats.totalDevolvidos)}
+              destaque
+            />
+            <StatCard
+              icon={<Feather name="users" size={16} color={COLORS.primary} />}
+              label="Alunos participantes"
+              valor={`${participacaoPercentual}%`}
+            />
+            <StatCard
+              icon={<Feather name="trending-up" size={16} color={COLORS.primary} />}
+              label="Média por aluno"
+              valor={stats.mediaPorAluno.toString().replace('.', ',')}
+            />
+          </View>
 
-        <GraficoCard />
-        <RankingCard />
-        <TurmasCard />
-        <CategoriasCard marginBottom={32} />
-      </ScrollView>
+          <View style={styles.tendenciaCard}>
+            <Feather
+              name={stats.tendenciaPercentual !== null && stats.tendenciaPercentual < 0 ? 'arrow-down-right' : 'arrow-up-right'}
+              size={14}
+              color={stats.tendenciaPercentual !== null && stats.tendenciaPercentual < 0 ? COLORS.error : COLORS.success}
+            />
+            <Text style={styles.tendenciaTexto}>
+              <Text style={styles.tendenciaValor}>
+                {stats.tendenciaPercentual === null ? 'Sem dados' : `${stats.tendenciaPercentual > 0 ? '+' : ''}${stats.tendenciaPercentual}%`}
+              </Text>{' '}
+              {stats.tendenciaPercentual !== null && (periodo === 'mensal' ? 'em relação ao mês anterior' : 'em relação ao ano anterior')}
+            </Text>
+          </View>
+
+          <GraficoCard />
+          <RankingCard />
+          <TurmasCard />
+          <CategoriasCard marginBottom={32} />
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -502,6 +518,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   cardTitulo: { fontSize: 15, fontWeight: '700', color: COLORS.onSurface },
+  vazioTexto: { fontSize: 12, color: COLORS.onSurfaceVariant, fontStyle: 'italic', paddingVertical: 8 },
 
   // Gráfico de barras
   grafico: { flexDirection: 'row', alignItems: 'flex-end', gap: 4 },
@@ -535,7 +552,7 @@ const styles = StyleSheet.create({
   rankingLivrosWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   rankingLivros: { fontSize: 13, fontWeight: '700', color: COLORS.onSurface },
 
-  // Turmas / categorias (barra de progresso horizontal)
+  // Turmas / categorias
   turmaLinha: { marginBottom: 14 },
   turmaHeaderLinha: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   turmaNome: { fontSize: 13, fontWeight: '600', color: COLORS.onSurface },
@@ -544,6 +561,13 @@ const styles = StyleSheet.create({
   barraPreenchida: { height: '100%', borderRadius: 999 },
   categoriaLabelWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   categoriaDot: { width: 8, height: 8, borderRadius: 4 },
+
+  // Loading / erro
+  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32 },
+  loadingTexto: { fontSize: 13, color: COLORS.onSurfaceVariant },
+  erroTexto: { fontSize: 13, color: COLORS.error, textAlign: 'center' },
+  tentarNovamenteBtn: { backgroundColor: COLORS.primary, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, marginTop: 4 },
+  tentarNovamenteTexto: { color: COLORS.onPrimary, fontSize: 13, fontWeight: '600' },
 
   // ═══════════════ DESKTOP ═══════════════
   containerDesktop: { flex: 1, backgroundColor: COLORS.background },
@@ -572,7 +596,7 @@ const styles = StyleSheet.create({
   tendenciaValorDesktop: { fontSize: 26, fontWeight: '800', color: COLORS.success },
 
   gridDesktop: { flexDirection: 'row', gap: 20, alignItems: 'flex-start' },
-  colunaPrincipal: { flex: 2.2, gap: 0 },
+  colunaPrincipal: { flex: 2.2 },
   colunaLateral: { flex: 1 },
   duasColunas: { flexDirection: 'row', gap: 20 },
   metadeColuna: { flex: 1 },

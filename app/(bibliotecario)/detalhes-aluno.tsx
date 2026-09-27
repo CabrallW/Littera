@@ -169,7 +169,9 @@ export default function DetalhesAlunoScreen() {
           </View>
           <View style={styles.tagsRow}>
             <View style={styles.tag}>
-              <Text style={styles.tagTexto}>Matrícula: {aluno.matricula || 'N/D'}</Text>
+              <Text style={styles.tagTexto}>
+                {aluno.serie && aluno.curso ? `${aluno.serie}º ${aluno.curso}` : 'Turma não definida'}
+              </Text>
             </View>
           </View>
         </View>

@@ -56,7 +56,7 @@ const AlunoCard = ({ aluno, onPress }: AlunoCardProps) => {
         <View style={styles.cardInfo}>
           <Text style={styles.cardTitle} numberOfLines={1}>{aluno.nome}</Text>
           <Text style={styles.cardSubtitle} numberOfLines={1}>
-            Mat: {aluno.matricula || 'N/D'}
+            {aluno.serie && aluno.curso ? `${aluno.serie}º ${aluno.curso}` : 'Turma não definida'}
           </Text>
         </View>
       </View>
@@ -157,7 +157,7 @@ export default function UsuariosScreen() {
       const termo = search.toLowerCase();
       const matchesSearch =
         aluno.nome.toLowerCase().includes(termo) ||
-        (aluno.matricula || '').toLowerCase().includes(termo);
+        (aluno.curso || '').toLowerCase().includes(termo);
       const matchesFilter =
         activeFilter === 'Todos' ||
         (activeFilter === 'Pendentes' && aluno.pendente) ||
@@ -187,7 +187,7 @@ export default function UsuariosScreen() {
           <Feather name="search" size={18} color={COLORS.outline} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Nome ou matrícula..."
+            placeholder="Nome ou curso..."
             placeholderTextColor={COLORS.outline}
             value={search}
             onChangeText={setSearch}
