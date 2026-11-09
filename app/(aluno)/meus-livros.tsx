@@ -269,7 +269,7 @@ export default function MeusLivrosScreen() {
       const arquivo = await escolherEImportarArquivo();
       if (arquivo) {
         await carregarArquivosDigitais();
-        router.push({ pathname: '/leitura', params: { uri: arquivo.uriLocal, extensao: arquivo.extensao } });
+        router.push({ pathname: '/leitura', params: { uri: arquivo.uriLocal, extensao: arquivo.extensao, arquivoId: arquivo.id } });
       }
     } catch (e: any) {
       Alert.alert('Erro', e.message || 'Não foi possível importar o arquivo.');
@@ -279,7 +279,7 @@ export default function MeusLivrosScreen() {
   }
 
   function handleAbrirArquivo(arquivo: ArquivoDigital) {
-    router.push({ pathname: '/leitura', params: { uri: arquivo.uriLocal, extensao: arquivo.extensao } });
+    router.push({ pathname: '/leitura', params: { uri: arquivo.uriLocal, extensao: arquivo.extensao, arquivoId: arquivo.id } });
   }
 
   function handleRemoverArquivo(arquivo: ArquivoDigital) {
